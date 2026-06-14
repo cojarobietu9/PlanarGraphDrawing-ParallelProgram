@@ -36,6 +36,9 @@ class Vertex:
         self.right_link = {}
         self.pertinent = False
         self.pertinentRoots = []
+        self.x = 0.0
+        self.y = 0.0
+        self.is_boundary = False
 
     def set_vertex_dfi(self,dfi):
         self.dfi = dfi
