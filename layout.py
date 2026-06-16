@@ -1,0 +1,188 @@
+import math
+import random
+from concurrent.futures import ThreadPoolExecutor
+def build_adjacency(edges):
+    adjacency = {}
+    for e in edges:
+        adjacency.setdefault(e.vertex_a_id, set()).add(e.vertex_b_id)
+        adjacency.setdefault(e.vertex_b_id, set()).add(e.vertex_a_id)
+    return adjacency
+
+def initialize_boundary_positions(vertices, adjacency, fixed_positions):
+    for vertex_id, (x, y) in fixed_positions.items():
+        if vertex_id in vertices:
+            vertices[vertex_id].x = x
+            vertices[vertex_id].y = y
+            vertices[vertex_id].is_boundary = True
+
+    if any(vertices.get(v).is_boundary for v in vertices):
+        return
+
+    if len(vertices) < 3:
+        for v in vertices:
+            v.is_boundary = True
+        return
+
+    ordered = sorted(vertices.values(), key=lambda item: len(adjacency.get(item.id, set())), reverse=True)
+    auto_boundary = ordered[:3]
+    for i, v in enumerate(auto_boundary):
+        angle = (2.0 * math.pi * i) / 3.0
+        v.x = math.cos(angle)
+        v.y = math.sin(angle)
+        v.is_boundary = True
+
+def _next_position(vertex_id, adjacency, positions):
+    neighbors = adjacency.get(vertex_id, set())
+    print(vertex_id, neighbors)
+    if not neighbors:
+        return vertex_id, positions[vertex_id]
+
+    sum_x = 0.0
+    sum_y = 0.0
+    for n_id in neighbors:
+        nx, ny = positions[n_id]
+        print(nx,ny)
+        sum_x += nx
+        sum_y += ny
+    count = float(len(neighbors))
+    return vertex_id, (sum_x / count, sum_y / count)
+
+
+def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=32):
+    if fixed_positions is None:
+        fixed_positions = {}
+
+    adjacency = build_adjacency(edges)
+    initialize_boundary_positions(vertices, adjacency, fixed_positions)
+
+    positions = {v_id: (v.x, v.y) for v_id, v in vertices.items()}
+    boundary_ids = {v for v in vertices if vertices.get(v).is_boundary}
+    internal_ids = [v for v in vertices if v not in boundary_ids]
+
+    print("boundry:", boundary_ids, "| internal:", internal_ids)
+
+    if boundary_ids:
+        bx = sum(positions[v_id][0] for v_id in boundary_ids) / len(boundary_ids)
+        by = sum(positions[v_id][1] for v_id in boundary_ids) / len(boundary_ids)
+    else:
+        bx = by = 0.0
+
+    boundary_list = list(boundary_ids)
+    print(boundary_list)
+
+    for v_id in internal_ids:
+        if boundary_list:
+            rand_boundary_id = random.choice(boundary_list)
+            bound_x, bound_y = positions[rand_boundary_id]
+            print(bound_x, bound_y)
+
+            w = random.uniform(0.05, 0.4)
+
+            start_x = bx * (1 - w) + bound_x * w
+            start_y = by * (1 - w) + bound_y * w
+
+            positions[v_id] = (start_x, start_y)
+        else:
+            positions[v_id] = (bx, by)
+
+    print("initial positions, before thread pool: ", positions)
+    print("adjecencies:", adjacency)
+
+    for abctest in range(max_iter):
+        print("iteration:", abctest)
+        max_delta = 0.0
+        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(internal_ids)))) as executor:
+            futures = [
+                executor.submit(_next_position, v_id, adjacency, positions)
+                for v_id in internal_ids
+            ]
+
+            updates = [f.result() for f in futures]
+
+
+        for v_id, (new_x, new_y) in updates:
+            old_x, old_y = positions[v_id]
+            delta = abs(new_x - old_x) + abs(new_y - old_y)
+            if delta > max_delta:
+                max_delta = delta
+            positions[v_id] = (new_x, new_y)
+
+        if max_delta < tol:
+            break
+
+    return positions
+
+def assign_positions(vertices, positions):
+    for v in vertices:
+        if v in positions:
+            vertices.get(v).x, vertices.get(v).y = positions[v]
+
+            # Parametry algorytmu siłowego
+            AREA = 1000.0 * 1000.0  # Obszar rysowania
+            K = math.sqrt(AREA / 100)  # Optymalna odległość między węzłami
+
+
+
+# import math
+# import random
+# from concurrent.futures import ThreadPoolExecutor
+#
+# # Parametry
+# AREA = 600.0 * 800.0
+# K = math.sqrt(AREA / 100)
+#
+#
+# def _calculate_vertex_displacement(v_id, all_positions, adjacency, t):
+#     """Oblicza wypadkową siłę dla pojedynczego wierzchołka."""
+#     disp_x, disp_y = 0.0, 0.0
+#     v_pos = all_positions[v_id]
+#
+#     # 1. Odpychanie od wszystkich (w tym nie-sąsiadów)
+#     for other_id, other_pos in all_positions.items():
+#         if v_id == other_id: continue
+#         dx = v_pos[0] - other_pos[0]
+#         dy = v_pos[1] - other_pos[1]
+#         dist = math.sqrt(dx * dx + dy * dy) + 0.1
+#         fr = (K * K) / dist
+#         disp_x += (dx / dist) * fr
+#         disp_y += (dy / dist) * fr
+#
+#     # 2. Przyciąganie tylko do sąsiadów
+#     for neighbor_id in adjacency.get(v_id, []):
+#         neighbor_pos = all_positions[neighbor_id]
+#         dx = v_pos[0] - neighbor_pos[0]
+#         dy = v_pos[1] - neighbor_pos[1]
+#         dist = math.sqrt(dx * dx + dy * dy) + 0.1
+#         fa = (dist * dist) / K
+#         disp_x -= (dx / dist) * fa
+#         disp_y -= (dy / dist) * fa
+#
+#     # 3. Ograniczenie przemieszczenia temperaturą
+#     disp_mag = math.sqrt(disp_x ** 2 + disp_y ** 2)
+#     if disp_mag > 0:
+#         factor = min(disp_mag, t) / disp_mag
+#         return v_id, (v_pos[0] + disp_x * factor, v_pos[1] + disp_y * factor)
+#
+#     return v_id, v_pos
+#
+#
+# def compute_force_directed_positions_parallel(vertices, edges, max_iter=300, temp=1.0, workers=32):
+#     positions = {v_id: (random.uniform(0, 1000), random.uniform(0, 1000)) for v_id in vertices}
+#     adjacency = build_adjacency(edges)
+#     t = temp
+#     dt = t / max_iter
+#
+#     for _ in range(max_iter):
+#         with ThreadPoolExecutor(max_workers=workers) as executor:
+#             # Planowanie obliczeń dla wszystkich wierzchołków równolegle
+#             futures = [
+#                 executor.submit(_calculate_vertex_displacement, v_id, positions, adjacency, t)
+#                 for v_id in vertices
+#             ]
+#             # Zebranie wyników
+#             new_positions = {res[0]: res[1] for res in [f.result() for f in futures]}
+#
+#         positions = new_positions
+#         t -= dt
+#
+#     return positions
