@@ -1,6 +1,8 @@
 import math
 import random
 from concurrent.futures import ThreadPoolExecutor
+
+
 def build_adjacency(edges):
     adjacency = {}
     for e in edges:
@@ -96,9 +98,7 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
                 executor.submit(_next_position, v_id, adjacency, positions)
                 for v_id in internal_ids
             ]
-
             updates = [f.result() for f in futures]
-
 
         for v_id, (new_x, new_y) in updates:
             old_x, old_y = positions[v_id]
@@ -117,72 +117,6 @@ def assign_positions(vertices, positions):
         if v in positions:
             vertices.get(v).x, vertices.get(v).y = positions[v]
 
-            # Parametry algorytmu siłowego
-            AREA = 1000.0 * 1000.0  # Obszar rysowania
-            K = math.sqrt(AREA / 100)  # Optymalna odległość między węzłami
+            AREA = 1000.0 * 1000.0
+            K = math.sqrt(AREA / 100)  
 
-
-
-# import math
-# import random
-# from concurrent.futures import ThreadPoolExecutor
-#
-# # Parametry
-# AREA = 600.0 * 800.0
-# K = math.sqrt(AREA / 100)
-#
-#
-# def _calculate_vertex_displacement(v_id, all_positions, adjacency, t):
-#     """Oblicza wypadkową siłę dla pojedynczego wierzchołka."""
-#     disp_x, disp_y = 0.0, 0.0
-#     v_pos = all_positions[v_id]
-#
-#     # 1. Odpychanie od wszystkich (w tym nie-sąsiadów)
-#     for other_id, other_pos in all_positions.items():
-#         if v_id == other_id: continue
-#         dx = v_pos[0] - other_pos[0]
-#         dy = v_pos[1] - other_pos[1]
-#         dist = math.sqrt(dx * dx + dy * dy) + 0.1
-#         fr = (K * K) / dist
-#         disp_x += (dx / dist) * fr
-#         disp_y += (dy / dist) * fr
-#
-#     # 2. Przyciąganie tylko do sąsiadów
-#     for neighbor_id in adjacency.get(v_id, []):
-#         neighbor_pos = all_positions[neighbor_id]
-#         dx = v_pos[0] - neighbor_pos[0]
-#         dy = v_pos[1] - neighbor_pos[1]
-#         dist = math.sqrt(dx * dx + dy * dy) + 0.1
-#         fa = (dist * dist) / K
-#         disp_x -= (dx / dist) * fa
-#         disp_y -= (dy / dist) * fa
-#
-#     # 3. Ograniczenie przemieszczenia temperaturą
-#     disp_mag = math.sqrt(disp_x ** 2 + disp_y ** 2)
-#     if disp_mag > 0:
-#         factor = min(disp_mag, t) / disp_mag
-#         return v_id, (v_pos[0] + disp_x * factor, v_pos[1] + disp_y * factor)
-#
-#     return v_id, v_pos
-#
-#
-# def compute_force_directed_positions_parallel(vertices, edges, max_iter=300, temp=1.0, workers=32):
-#     positions = {v_id: (random.uniform(0, 1000), random.uniform(0, 1000)) for v_id in vertices}
-#     adjacency = build_adjacency(edges)
-#     t = temp
-#     dt = t / max_iter
-#
-#     for _ in range(max_iter):
-#         with ThreadPoolExecutor(max_workers=workers) as executor:
-#             # Planowanie obliczeń dla wszystkich wierzchołków równolegle
-#             futures = [
-#                 executor.submit(_calculate_vertex_displacement, v_id, positions, adjacency, t)
-#                 for v_id in vertices
-#             ]
-#             # Zebranie wyników
-#             new_positions = {res[0]: res[1] for res in [f.result() for f in futures]}
-#
-#         positions = new_positions
-#         t -= dt
-#
-#     return positions
