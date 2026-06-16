@@ -22,14 +22,12 @@ class GraphVisualizer:
             start_v = self.vertices.get(e.vertex_a_id)
             end_v = self.vertices.get(e.vertex_b_id)
 
-            if start_v and end_v:
-                x1, y1 = start_v.x*self.multiplier, start_v.y*self.multiplier
+
+            x1, y1 = start_v.x*self.multiplier, start_v.y*self.multiplier
                 x2, y2 = end_v.x*self.multiplier, end_v.y*self.multiplier
                 # self.canvas.create_line(x1, y1, x2, y2, fill="black", width=2)
                 self.canvas.create_line(self.width / 2 - x1, self.height / 2 - y1, self.width / 2 - x2,
                                         self.height / 2 - y2, fill="black", width=2)
-            else:
-                print(f"Ostrzeżenie: Krawędź między nieistniejącymi wierzchołkami: {start_v} - {end_v}")
 
     def _draw_vertices(self):
 
