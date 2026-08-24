@@ -1,7 +1,7 @@
 import math
 import random
-from concurrent.futures import ThreadPoolExecutor
-
+#from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Pool
 
 def build_adjacency(edges):
     adjacency = {}
@@ -35,6 +35,7 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
 
 def _next_position(vertex_id, adjacency, positions):
     neighbors = adjacency.get(vertex_id, set())
+#    print(vertex_id, neighbors)
     if not neighbors:
         return vertex_id, positions[vertex_id]
 
@@ -42,7 +43,7 @@ def _next_position(vertex_id, adjacency, positions):
     sum_y = 0.0
     for n_id in neighbors:
         nx, ny = positions[n_id]
-
+ #       print(nx,ny)
         sum_x += nx
         sum_y += ny
     count = float(len(neighbors))
@@ -60,7 +61,7 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
     boundary_ids = {v for v in vertices if vertices.get(v).is_boundary}
     internal_ids = [v for v in vertices if v not in boundary_ids]
 
-    #print("boundry:", boundary_ids, "| internal:", internal_ids)
+#    print("boundry:", boundary_ids, "| internal:", internal_ids)
 
     if boundary_ids:
         bx = sum(positions[v_id][0] for v_id in boundary_ids) / len(boundary_ids)
@@ -69,12 +70,13 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         bx = by = 0.0
 
     boundary_list = list(boundary_ids)
+#    print(boundary_list)
 
     for v_id in internal_ids:
         if boundary_list:
             rand_boundary_id = random.choice(boundary_list)
             bound_x, bound_y = positions[rand_boundary_id]
-
+#            print(bound_x, bound_y)
 
             w = random.uniform(0.05, 0.4)
 
@@ -86,26 +88,29 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
             positions[v_id] = (bx, by)
 
 #    print("initial positions, before thread pool: ", positions)
- #   print("adjecencies:", adjacency)
+#    print("adjecencies:", adjacency)
+    with Pool(workers) as p:
+        for abctest in range(max_iter):
+            max_delta = 0.0
 
-    for abctest in range(max_iter):
-        max_delta = 0.0
-        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(internal_ids)))) as executor:
+        #with ThreadPoolExecutor(max_workers=min(workers, max(1, len(internal_ids)))) as executor:
             futures = [
-                executor.submit(_next_position, v_id, adjacency, positions)
+                p.apply_async(_next_position, args = (v_id, adjacency, positions))
                 for v_id in internal_ids
             ]
-            updates = [f.result() for f in futures]
 
-        for v_id, (new_x, new_y) in updates:
-            old_x, old_y = positions[v_id]
-            delta = abs(new_x - old_x) + abs(new_y - old_y)
-            if delta > max_delta:
-                max_delta = delta
-            positions[v_id] = (new_x, new_y)
+            updates = [f.get() for f in futures]
 
-        if max_delta < tol:
-            break
+
+            for v_id, (new_x, new_y) in updates:
+                old_x, old_y = positions[v_id]
+                delta = abs(new_x - old_x) + abs(new_y - old_y)
+                if delta > max_delta:
+                    max_delta = delta
+                positions[v_id] = (new_x, new_y)
+
+            if max_delta < tol:
+                break
 
     return positions
 
@@ -114,6 +119,5 @@ def assign_positions(vertices, positions):
         if v in positions:
             vertices.get(v).x, vertices.get(v).y = positions[v]
 
-            AREA = 1000.0 * 1000.0
-            K = math.sqrt(AREA / 100)  
-
+ #           AREA = 1000.0 * 1000.0
+ #           K = math.sqrt(AREA / 100)
