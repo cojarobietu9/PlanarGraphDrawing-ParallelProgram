@@ -1,7 +1,58 @@
 import math
 import random
-#from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.shared_memory import SharedMemory
 from multiprocessing import Pool
+import numpy as np
+
+# Globalne zmienne dla procesu-workera
+ADJACENCY = {}
+POS_OLD = None
+POS_NEW = None
+ID_TO_IDX = {}
+
+
+def init_worker(adj, shm_old_name, shm_new_name, n, id_to_idx):
+    global ADJACENCY, POS_OLD, POS_NEW, ID_TO_IDX
+    ADJACENCY = adj
+    ID_TO_IDX = id_to_idx
+
+    # Podłączenie pod dwa istniejące bufory SharedMemory
+    shm_old = SharedMemory(name=shm_old_name)
+    shm_new = SharedMemory(name=shm_new_name)
+
+    POS_OLD = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
+    POS_NEW = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
+
+
+def worker_step(vertex_ids):
+    local_max_delta = 0.0
+    for vertex_id in vertex_ids:
+        idx = ID_TO_IDX[vertex_id]
+        neighbors = ADJACENCY.get(vertex_id, set())
+
+        if not neighbors:
+            new_x, new_y = POS_OLD[idx, 0], POS_OLD[idx, 1]
+        else:
+            sum_x = 0.0
+            sum_y = 0.0
+            for n_id in neighbors:
+                n_idx = ID_TO_IDX[n_id]
+                sum_x += POS_OLD[n_idx, 0]
+                sum_y += POS_OLD[n_idx, 1]
+            count = float(len(neighbors))
+            new_x, new_y = sum_x / count, sum_y / count
+
+        # Bezpośredni zapis do bufora NEW
+        POS_NEW[idx, 0] = new_x
+        POS_NEW[idx, 1] = new_y
+
+        # Obliczenie lokalnej delty
+        delta = abs(new_x - POS_OLD[idx, 0]) + abs(new_y - POS_OLD[idx, 1])
+        if delta > local_max_delta:
+            local_max_delta = delta
+
+    return local_max_delta
+
 
 def build_adjacency(edges):
     adjacency = {}
@@ -9,6 +60,7 @@ def build_adjacency(edges):
         adjacency.setdefault(e.vertex_a_id, set()).add(e.vertex_b_id)
         adjacency.setdefault(e.vertex_b_id, set()).add(e.vertex_a_id)
     return adjacency
+
 
 def initialize_boundary_positions(vertices, adjacency, fixed_positions):
     for vertex_id, (x, y) in fixed_positions.items():
@@ -33,24 +85,9 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         v.y = math.sin(angle)
         v.is_boundary = True
 
-def _next_position(vertex_id, adjacency, positions):
-    neighbors = adjacency.get(vertex_id, set())
-#    print(vertex_id, neighbors)
-    if not neighbors:
-        return vertex_id, positions[vertex_id]
 
-    sum_x = 0.0
-    sum_y = 0.0
-    for n_id in neighbors:
-        nx, ny = positions[n_id]
- #       print(nx,ny)
-        sum_x += nx
-        sum_y += ny
-    count = float(len(neighbors))
-    return vertex_id, (sum_x / count, sum_y / count)
-
-
-def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=32):
+def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=4,
+                                        threshold=1000):
     if fixed_positions is None:
         fixed_positions = {}
 
@@ -61,8 +98,6 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
     boundary_ids = {v for v in vertices if vertices.get(v).is_boundary}
     internal_ids = [v for v in vertices if v not in boundary_ids]
 
-#    print("boundry:", boundary_ids, "| internal:", internal_ids)
-
     if boundary_ids:
         bx = sum(positions[v_id][0] for v_id in boundary_ids) / len(boundary_ids)
         by = sum(positions[v_id][1] for v_id in boundary_ids) / len(boundary_ids)
@@ -70,54 +105,100 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         bx = by = 0.0
 
     boundary_list = list(boundary_ids)
-#    print(boundary_list)
 
     for v_id in internal_ids:
         if boundary_list:
             rand_boundary_id = random.choice(boundary_list)
             bound_x, bound_y = positions[rand_boundary_id]
-#            print(bound_x, bound_y)
-
             w = random.uniform(0.05, 0.4)
-
             start_x = bx * (1 - w) + bound_x * w
             start_y = by * (1 - w) + bound_y * w
-
             positions[v_id] = (start_x, start_y)
         else:
             positions[v_id] = (bx, by)
 
-#    print("initial positions, before thread pool: ", positions)
-#    print("adjecencies:", adjacency)
-    with Pool(workers) as p:
-        for abctest in range(max_iter):
+    # 6. Fallback do wersji jednoprocesowej dla małych grafów
+    if len(internal_ids) < threshold:
+        for _ in range(max_iter):
             max_delta = 0.0
+            new_positions = {}
+            for v_id in internal_ids:
+                neighbors = adjacency.get(v_id, set())
+                if not neighbors:
+                    new_positions[v_id] = positions[v_id]
+                    continue
+                sum_x = sum(positions[n_id][0] for n_id in neighbors)
+                sum_y = sum(positions[n_id][1] for n_id in neighbors)
+                count = float(len(neighbors))
+                new_x, new_y = sum_x / count, sum_y / count
+                new_positions[v_id] = (new_x, new_y)
 
-        #with ThreadPoolExecutor(max_workers=min(workers, max(1, len(internal_ids)))) as executor:
-            futures = [
-                p.apply_async(_next_position, args = (v_id, adjacency, positions))
-                for v_id in internal_ids
-            ]
-
-            updates = [f.get() for f in futures]
-
-
-            for v_id, (new_x, new_y) in updates:
                 old_x, old_y = positions[v_id]
                 delta = abs(new_x - old_x) + abs(new_y - old_y)
                 if delta > max_delta:
                     max_delta = delta
-                positions[v_id] = (new_x, new_y)
 
+            positions.update(new_positions)
             if max_delta < tol:
                 break
+        return positions
 
-    return positions
+    # 3. Zbuduj mapowanie i tablicę (N, 2)
+    all_vertex_ids = list(vertices.keys())
+    id_to_idx = {v_id: idx for idx, v_id in enumerate(all_vertex_ids)}
+    n = len(all_vertex_ids)
+
+    # Rezerwacja podwójnego bufora SharedMemory (ping-pong)
+    bytes_size = n * 2 * np.dtype(np.float64).itemsize
+    shm_old = SharedMemory(create=True, size=bytes_size)
+    shm_new = SharedMemory(create=True, size=bytes_size)
+
+    try:
+        arr_old = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
+        arr_new = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
+
+        # Inicjalizacja danymi wejściowymi obu buforów
+        for v_id, (x, y) in positions.items():
+            idx = id_to_idx[v_id]
+            arr_old[idx] = [x, y]
+            arr_new[idx] = [x, y]
+
+        # Podział pracy na chunki
+        chunk_size = math.ceil(len(internal_ids) / workers)
+        chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
+
+        with Pool(workers, initializer=init_worker,
+                  initargs=(adjacency, shm_old.name, shm_new.name, n, id_to_idx)) as p:
+            for _ in range(max_iter):
+                # 2. Przekazujemy tylko chunk (lista ID), zero positions w payloadzie
+                deltas = p.map(worker_step, chunks)
+
+                max_delta = max(deltas) if deltas else 0.0
+
+                # 4. Zamiana buforów miejscami po iteracji (ping-pong)
+                arr_old, arr_new = arr_new, arr_old
+                shm_old, shm_new = shm_new, shm_old
+
+                if max_delta < tol:
+                    break
+
+        # Odczyt końcowych wyników z aktualnego bufora
+        final_positions = {}
+        for v_id in vertices:
+            idx = id_to_idx[v_id]
+            final_positions[v_id] = (float(arr_old[idx, 0]), float(arr_old[idx, 1]))
+
+        return final_positions
+
+    finally:
+        # Zwolnienie zasobów shared memory w procesie głównym
+        shm_old.close()
+        shm_old.unlink()
+        shm_new.close()
+        shm_new.unlink()
+
 
 def assign_positions(vertices, positions):
     for v in vertices:
         if v in positions:
             vertices.get(v).x, vertices.get(v).y = positions[v]
-
- #           AREA = 1000.0 * 1000.0
- #           K = math.sqrt(AREA / 100)
