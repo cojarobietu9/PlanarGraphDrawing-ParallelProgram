@@ -86,8 +86,7 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         v.is_boundary = True
 
 
-def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=4,
-                                        threshold=1000):
+def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=4,):
     if fixed_positions is None:
         fixed_positions = {}
 
@@ -117,30 +116,28 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         else:
             positions[v_id] = (bx, by)
 
-    # 6. Fallback do wersji jednoprocesowej dla małych grafów
-    if len(internal_ids) < threshold:
-        for _ in range(max_iter):
-            max_delta = 0.0
-            new_positions = {}
-            for v_id in internal_ids:
-                neighbors = adjacency.get(v_id, set())
-                if not neighbors:
-                    new_positions[v_id] = positions[v_id]
-                    continue
-                sum_x = sum(positions[n_id][0] for n_id in neighbors)
-                sum_y = sum(positions[n_id][1] for n_id in neighbors)
-                count = float(len(neighbors))
-                new_x, new_y = sum_x / count, sum_y / count
-                new_positions[v_id] = (new_x, new_y)
+    for _ in range(max_iter):
+        max_delta = 0.0
+        new_positions = {}
+        for v_id in internal_ids:
+            neighbors = adjacency.get(v_id, set())
+            if not neighbors:
+                new_positions[v_id] = positions[v_id]
+                continue
+            sum_x = sum(positions[n_id][0] for n_id in neighbors)
+            sum_y = sum(positions[n_id][1] for n_id in neighbors)
+            count = float(len(neighbors))
+            new_x, new_y = sum_x / count, sum_y / count
+            new_positions[v_id] = (new_x, new_y)
 
-                old_x, old_y = positions[v_id]
-                delta = abs(new_x - old_x) + abs(new_y - old_y)
-                if delta > max_delta:
-                    max_delta = delta
+            old_x, old_y = positions[v_id]
+            delta = abs(new_x - old_x) + abs(new_y - old_y)
+            if delta > max_delta:
+                max_delta = delta
 
-            positions.update(new_positions)
-            if max_delta < tol:
-                break
+        positions.update(new_positions)
+        if max_delta < tol:
+            break
         return positions
 
     # 3. Zbuduj mapowanie i tablicę (N, 2)
