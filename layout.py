@@ -1,14 +1,13 @@
 import math
 import random
 from multiprocessing.shared_memory import SharedMemory
-from multiprocessing import Pool
+from multiprocessing.pool import Pool
 import numpy as np
 
-# Globalne zmienne dla procesu-workera
-ADJACENCY = {}
+ADJACENCY = None
 POS_OLD = None
 POS_NEW = None
-ID_TO_IDX = {}
+ID_TO_IDX = None
 
 
 def init_worker(adj, shm_old_name, shm_new_name, n, id_to_idx):
@@ -16,7 +15,6 @@ def init_worker(adj, shm_old_name, shm_new_name, n, id_to_idx):
     ADJACENCY = adj
     ID_TO_IDX = id_to_idx
 
-    # Podłączenie pod dwa istniejące bufory SharedMemory
     shm_old = SharedMemory(name=shm_old_name)
     shm_new = SharedMemory(name=shm_new_name)
 
@@ -42,11 +40,9 @@ def worker_step(vertex_ids):
             count = float(len(neighbors))
             new_x, new_y = sum_x / count, sum_y / count
 
-        # Bezpośredni zapis do bufora NEW
         POS_NEW[idx, 0] = new_x
         POS_NEW[idx, 1] = new_y
 
-        # Obliczenie lokalnej delty
         delta = abs(new_x - POS_OLD[idx, 0]) + abs(new_y - POS_OLD[idx, 1])
         if delta > local_max_delta:
             local_max_delta = delta
@@ -73,7 +69,7 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         return
 
     if len(vertices) < 3:
-        for v in vertices:
+        for v in vertices.values():
             v.is_boundary = True
         return
 
@@ -138,62 +134,7 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         positions.update(new_positions)
         if max_delta < tol:
             break
-        return positions
-
-    # 3. Zbuduj mapowanie i tablicę (N, 2)
-    all_vertex_ids = list(vertices.keys())
-    id_to_idx = {v_id: idx for idx, v_id in enumerate(all_vertex_ids)}
-    n = len(all_vertex_ids)
-
-    # Rezerwacja podwójnego bufora SharedMemory (ping-pong)
-    bytes_size = n * 2 * np.dtype(np.float64).itemsize
-    shm_old = SharedMemory(create=True, size=bytes_size)
-    shm_new = SharedMemory(create=True, size=bytes_size)
-
-    try:
-        arr_old = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
-        arr_new = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
-
-        # Inicjalizacja danymi wejściowymi obu buforów
-        for v_id, (x, y) in positions.items():
-            idx = id_to_idx[v_id]
-            arr_old[idx] = [x, y]
-            arr_new[idx] = [x, y]
-
-        # Podział pracy na chunki
-        chunk_size = math.ceil(len(internal_ids) / workers)
-        chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
-
-        with Pool(workers, initializer=init_worker,
-                  initargs=(adjacency, shm_old.name, shm_new.name, n, id_to_idx)) as p:
-            for _ in range(max_iter):
-                # 2. Przekazujemy tylko chunk (lista ID), zero positions w payloadzie
-                deltas = p.map(worker_step, chunks)
-
-                max_delta = max(deltas) if deltas else 0.0
-
-                # 4. Zamiana buforów miejscami po iteracji (ping-pong)
-                arr_old, arr_new = arr_new, arr_old
-                shm_old, shm_new = shm_new, shm_old
-
-                if max_delta < tol:
-                    break
-
-        # Odczyt końcowych wyników z aktualnego bufora
-        final_positions = {}
-        for v_id in vertices:
-            idx = id_to_idx[v_id]
-            final_positions[v_id] = (float(arr_old[idx, 0]), float(arr_old[idx, 1]))
-
-        return final_positions
-
-    finally:
-        # Zwolnienie zasobów shared memory w procesie głównym
-        shm_old.close()
-        shm_old.unlink()
-        shm_new.close()
-        shm_new.unlink()
-
+    return positions
 
 def assign_positions(vertices, positions):
     for v in vertices:
