@@ -134,7 +134,55 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         positions.update(new_positions)
         if max_delta < tol:
             break
-    return positions
+        return positions
+    all_vertex_ids = list(vertices.keys())
+    id_to_idx = {v_id: idx for idx, v_id in enumerate(all_vertex_ids)}
+    n = len(all_vertex_ids)
+
+    bytes_size = n * 2 * np.dtype(np.float64).itemsize
+    shm_old = SharedMemory(create=True, size=bytes_size)
+    shm_new = SharedMemory(create=True, size=bytes_size)
+
+    try:
+        arr_old = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
+        arr_new = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
+
+        for v_id, (x, y) in positions.items():
+            idx = id_to_idx[v_id]
+            arr_old[idx] = [x, y]
+            arr_new[idx] = [x, y]
+
+        chunk_size = math.ceil(len(internal_ids) / workers)
+        chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
+
+        with Pool(workers, initializer=init_worker,
+                  initargs=(adjacency, shm_old.name, shm_new.name, n, id_to_idx)) as p:
+            for _ in range(max_iter):
+                deltas = p.map(worker_step, chunks)
+
+                max_delta = max(deltas) if deltas else 0.0
+
+                arr_old, arr_new = arr_new, arr_old
+                shm_old, shm_new = shm_new, shm_old
+
+                if max_delta < tol:
+                    break
+
+
+        final_positions = {}
+        for v_id in vertices:
+            idx = id_to_idx[v_id]
+            final_positions[v_id] = (float(arr_old[idx, 0]), float(arr_old[idx, 1]))
+
+        return final_positions
+
+    finally:
+
+        shm_old.close()
+        shm_old.unlink()
+        shm_new.close()
+        shm_new.unlink()
+
 
 def assign_positions(vertices, positions):
     for v in vertices:
