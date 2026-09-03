@@ -13,8 +13,8 @@ if __name__=="__main__":
     edges = []
     vertices = {}
     file_name = sys.argv[1] if len(sys.argv) > 1 else "test.txt"
-    max_workers = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    vert_id =[]
+    max_workers = int(sys.argv[2]) if len(sys.argv) > 2 else 4
+
     with open(file_name,"r") as f:
         for line in f:
             line = line.split()
@@ -27,13 +27,10 @@ if __name__=="__main__":
 
 
     pt = PlanarityTester(vertices,edges)
+    print("Graph is planar - ", pt.is_planar())
     if pt.is_planar():
         positions = compute_internal_positions_parallel(vertices, edges, workers=max_workers)
         assign_positions(vertices, positions)
-        for v in vertices:
-            vertex=vertices.get(v)
-        #role = "boundary" if vertex.is_boundary else "internal"
-        #print(f"{vertex.id}: ({vertex.x:.6f}, {vertex.y:.6f}) [{role}]")
         end = time.time()
         print(end - start)
 
@@ -42,12 +39,5 @@ if __name__=="__main__":
         app = GraphVisualizer(root, vertices, edges)
         root.mainloop()
 
-    print("Graph is planar - ",pt.is_planar())
 
-# for v in vertices:
-#     vx = vertices.get(v)
-#     print(vx.id, vx.x, vx.y)
-
-
-    print(pt.is_planar())
 
