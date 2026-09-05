@@ -1,53 +1,71 @@
 import math
+import traceback
 import random
 from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.pool import Pool
 import numpy as np
 
-ADJACENCY = None
+
+ADJACENCY = {}
 POS_OLD = None
 POS_NEW = None
-ID_TO_IDX = None
+ID_TO_IDX = {}
+SHM_OLD = None
+SHM_NEW = None
 
 
 def init_worker(adj, shm_old_name, shm_new_name, n, id_to_idx):
-    global ADJACENCY, POS_OLD, POS_NEW, ID_TO_IDX
+    global ADJACENCY, POS_OLD, POS_NEW, ID_TO_IDX, SHM_OLD, SHM_NEW
     ADJACENCY = adj
     ID_TO_IDX = id_to_idx
+    try:
+        SHM_OLD = SharedMemory(name=shm_old_name,track = False)
+    except FileNotFoundError:
+        raise RuntimeError("shm_old has not been created properly.")
 
-    shm_old = SharedMemory(name=shm_old_name)
-    shm_new = SharedMemory(name=shm_new_name)
+    try:
+        SHM_NEW = SharedMemory(name=shm_new_name,track = False)
+    except FileNotFoundError:
+        raise RuntimeError("shm_new has not been created properly.")
 
-    POS_OLD = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
-    POS_NEW = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
+    POS_OLD = np.ndarray((n, 2), dtype=np.float64, buffer=SHM_OLD.buf)
+    POS_NEW = np.ndarray((n, 2), dtype=np.float64, buffer=SHM_NEW.buf)
 
 
 def worker_step(vertex_ids):
-    local_max_delta = 0.0
-    for vertex_id in vertex_ids:
-        idx = ID_TO_IDX[vertex_id]
-        neighbors = ADJACENCY.get(vertex_id, set())
+    global POS_OLD, POS_NEW
+    try:
+        local_max_delta = 0.0
 
-        if not neighbors:
-            new_x, new_y = POS_OLD[idx, 0], POS_OLD[idx, 1]
-        else:
-            sum_x = 0.0
-            sum_y = 0.0
-            for n_id in neighbors:
-                n_idx = ID_TO_IDX[n_id]
-                sum_x += POS_OLD[n_idx, 0]
-                sum_y += POS_OLD[n_idx, 1]
-            count = float(len(neighbors))
-            new_x, new_y = sum_x / count, sum_y / count
+        for vertex_id in vertex_ids:
+            idx = ID_TO_IDX[vertex_id]
+            neighbors = ADJACENCY.get(vertex_id, set())
 
-        POS_NEW[idx, 0] = new_x
-        POS_NEW[idx, 1] = new_y
+            if not neighbors:
+                new_x, new_y = POS_OLD[idx, 0], POS_OLD[idx, 1]
+            else:
+                sum_x = 0.0
+                sum_y = 0.0
+                for n_id in neighbors:
+                    n_idx = ID_TO_IDX[n_id]
+                    sum_x += POS_OLD[n_idx, 0]
+                    sum_y += POS_OLD[n_idx, 1]
 
-        delta = abs(new_x - POS_OLD[idx, 0]) + abs(new_y - POS_OLD[idx, 1])
-        if delta > local_max_delta:
-            local_max_delta = delta
+                count = float(len(neighbors))
+                new_x, new_y = sum_x / count, sum_y / count
 
-    return local_max_delta
+            POS_NEW[idx, 0] = new_x
+            POS_NEW[idx, 1] = new_y
+
+
+            delta = abs(new_x - POS_OLD[idx, 0]) + abs(new_y - POS_OLD[idx, 1])
+            if delta > local_max_delta:
+                local_max_delta = delta
+        POS_OLD, POS_NEW = POS_NEW, POS_OLD
+        return local_max_delta
+    except Exception:
+        traceback.print_exc()
+        raise
 
 
 def build_adjacency(edges):
@@ -69,7 +87,7 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         return
 
     if len(vertices) < 3:
-        for v in vertices.values():
+        for v in vertices:
             v.is_boundary = True
         return
 
@@ -82,10 +100,9 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         v.is_boundary = True
 
 
-def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=4,):
+def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, max_iter=300, tol=1e-5, workers=4):
     if fixed_positions is None:
         fixed_positions = {}
-
     adjacency = build_adjacency(edges)
     initialize_boundary_positions(vertices, adjacency, fixed_positions)
 
@@ -112,76 +129,55 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         else:
             positions[v_id] = (bx, by)
 
-    for _ in range(max_iter):
-        max_delta = 0.0
-        new_positions = {}
-        for v_id in internal_ids:
-            neighbors = adjacency.get(v_id, set())
-            if not neighbors:
-                new_positions[v_id] = positions[v_id]
-                continue
-            sum_x = sum(positions[n_id][0] for n_id in neighbors)
-            sum_y = sum(positions[n_id][1] for n_id in neighbors)
-            count = float(len(neighbors))
-            new_x, new_y = sum_x / count, sum_y / count
-            new_positions[v_id] = (new_x, new_y)
 
-            old_x, old_y = positions[v_id]
-            delta = abs(new_x - old_x) + abs(new_y - old_y)
-            if delta > max_delta:
-                max_delta = delta
 
-        positions.update(new_positions)
-        if max_delta < tol:
-            break
-        return positions
     all_vertex_ids = list(vertices.keys())
     id_to_idx = {v_id: idx for idx, v_id in enumerate(all_vertex_ids)}
     n = len(all_vertex_ids)
+
 
     bytes_size = n * 2 * np.dtype(np.float64).itemsize
     shm_old = SharedMemory(create=True, size=bytes_size)
     shm_new = SharedMemory(create=True, size=bytes_size)
 
-    try:
-        arr_old = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
-        arr_new = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
 
-        for v_id, (x, y) in positions.items():
-            idx = id_to_idx[v_id]
-            arr_old[idx] = [x, y]
-            arr_new[idx] = [x, y]
+    arr_old = np.ndarray((n, 2), dtype=np.float64, buffer=shm_old.buf)
+    arr_new = np.ndarray((n, 2), dtype=np.float64, buffer=shm_new.buf)
 
-        chunk_size = math.ceil(len(internal_ids) / workers)
-        chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
-
-        with Pool(workers, initializer=init_worker,
-                  initargs=(adjacency, shm_old.name, shm_new.name, n, id_to_idx)) as p:
-            for _ in range(max_iter):
-                deltas = p.map(worker_step, chunks)
-
-                max_delta = max(deltas) if deltas else 0.0
-
-                arr_old, arr_new = arr_new, arr_old
-                shm_old, shm_new = shm_new, shm_old
-
-                if max_delta < tol:
-                    break
+    for v_id, (x, y) in positions.items():
+        idx = id_to_idx[v_id]
+        arr_old[idx] = [x, y]
+        arr_new[idx] = [x, y]
 
 
-        final_positions = {}
-        for v_id in vertices:
-            idx = id_to_idx[v_id]
-            final_positions[v_id] = (float(arr_old[idx, 0]), float(arr_old[idx, 1]))
+    chunk_size = math.ceil(len(internal_ids) / workers)
+    chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
 
-        return final_positions
 
-    finally:
 
-        shm_old.close()
-        shm_old.unlink()
-        shm_new.close()
-        shm_new.unlink()
+    with Pool(workers, initializer=init_worker,
+                initargs=(adjacency, shm_old.name, shm_new.name, n, id_to_idx)) as p:
+
+        for i in range(max_iter):
+            deltas = p.map(worker_step, chunks)
+            max_delta = max(deltas) if deltas else 0.0
+
+            arr_old, arr_new = arr_new, arr_old
+            shm_old, shm_new = shm_new, shm_old
+
+            if max_delta < tol:
+                break
+
+    final_positions = {}
+    for v_id in vertices:
+        idx = id_to_idx[v_id]
+        final_positions[v_id] = (float(arr_old[idx, 0]), float(arr_old[idx, 1]))
+    shm_old.close()
+    shm_old.unlink()
+    shm_new.close()
+    shm_new.unlink()
+    return final_positions
+
 
 
 def assign_positions(vertices, positions):
