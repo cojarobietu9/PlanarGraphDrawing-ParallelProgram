@@ -7,10 +7,16 @@ class Edge:
         self.weight = weight
 
 
-
 class Vertex:
     def __init__(self, id_val):
         self.id = id_val
         self.x = 0.0
         self.y = 0.0
         self.is_boundary = False
+
+
+class Segment:
+    def __init__(self, edges, attachments):
+        self.edges = set(edges)
+        self.attachments = set(attachments)
+        self.allowed_faces = []
