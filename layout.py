@@ -61,7 +61,6 @@ def worker_step(vertex_ids):
             delta = abs(new_x - POS_OLD[idx, 0]) + abs(new_y - POS_OLD[idx, 1])
             if delta > local_max_delta:
                 local_max_delta = delta
-        POS_OLD, POS_NEW = POS_NEW, POS_OLD
         return local_max_delta
     except Exception:
         traceback.print_exc()
@@ -87,7 +86,7 @@ def initialize_boundary_positions(vertices, adjacency, fixed_positions):
         return
 
     if len(vertices) < 3:
-        for v in vertices:
+        for v in vertices.values():
             v.is_boundary = True
         return
 
@@ -149,9 +148,11 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
         arr_old[idx] = [x, y]
         arr_new[idx] = [x, y]
 
-
-    chunk_size = math.ceil(len(internal_ids) / workers)
-    chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
+    if internal_ids:
+        chunk_size = math.ceil(len(internal_ids) / workers)
+        chunks = [internal_ids[i:i + chunk_size] for i in range(0, len(internal_ids), chunk_size)]
+    else:
+        chunks = []
 
 
 
@@ -162,9 +163,7 @@ def compute_internal_positions_parallel(vertices, edges, fixed_positions=None, m
             deltas = p.map(worker_step, chunks)
             max_delta = max(deltas) if deltas else 0.0
 
-            arr_old, arr_new = arr_new, arr_old
-            shm_old, shm_new = shm_new, shm_old
-
+            arr_old[:] = arr_new 
             if max_delta < tol:
                 break
 
