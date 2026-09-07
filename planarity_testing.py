@@ -185,7 +185,6 @@ class PlanarityTester:
                     path_visited.add(next_vertex)
                     queue.append(current_path + [next_vertex])
 
-        return None
 
     def embed_segment(self, path_vertices, chosen_face, faces, E_embedded, V_embedded):
         vertex_a = path_vertices[0]
