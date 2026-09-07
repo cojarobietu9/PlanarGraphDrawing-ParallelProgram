@@ -1,12 +1,10 @@
+
 class Edge:
     def __init__(self, name, vertex_a_id, vertex_b_id, weight=1.0):
         self.name = name
         self.vertex_a_id = vertex_a_id
         self.vertex_b_id = vertex_b_id
-        self.vertex_a = None
-        self.vertex_b = None
         self.weight = weight
-
 
 
 class Vertex:
@@ -15,3 +13,10 @@ class Vertex:
         self.x = 0.0
         self.y = 0.0
         self.is_boundary = False
+
+
+class Segment:
+    def __init__(self, edges, attachments):
+        self.edges = set(edges)
+        self.attachments = set(attachments)
+        self.allowed_faces = []
